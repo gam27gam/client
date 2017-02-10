@@ -866,6 +866,10 @@
         {
           "type": "MessageType",
           "name": "messageType"
+        },
+        {
+          "type": "gregor1.Time",
+          "name": "ctime"
         }
       ]
     },
@@ -1005,6 +1009,10 @@
           "name": "permanent"
         },
         {
+          "type": "string",
+          "name": "unverifiedTLFName"
+        },
+        {
           "type": [
             null,
             "ConversationErrorRekey"
@@ -1070,14 +1078,14 @@
         {
           "type": {
             "type": "array",
-            "items": "ConversationID"
+            "items": "ConversationMetadata"
           },
           "name": "supersedes"
         },
         {
           "type": {
             "type": "array",
-            "items": "ConversationID"
+            "items": "ConversationMetadata"
           },
           "name": "supersededBy"
         },

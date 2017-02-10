@@ -2,6 +2,7 @@
 import * as Constants from '../constants/chat'
 import HiddenString from '../util/hidden-string'
 import engine from '../engine'
+import _ from 'lodash'
 import {List, Map} from 'immutable'
 import {NotifyPopup} from '../native/notifications'
 import {apiserverGetRpcPromise, TlfKeysTLFIdentifyBehavior} from '../constants/types/flow-types'
@@ -33,6 +34,7 @@ import type {SagaGenerator, ChannelMap} from '../constants/types/saga'
 import type {TypedState} from '../constants/reducer'
 import type {
   AppendMessages,
+  AttachmentInput,
   BadgeAppForChat,
   ConversationBadgeState,
   ConversationIDKey,
@@ -55,6 +57,7 @@ import type {
   NewChat,
   OpenAttachmentPopup,
   OpenFolder,
+  OpenTlfInChat,
   OutboxIDKey,
   PostMessage,
   RemoveOutboxMessage,
@@ -74,6 +77,8 @@ const {
   CommonMessageType,
   CommonTLFVisibility,
   CommonTopicType,
+  LocalMessageUnboxedErrorType,
+  LocalConversationErrorType,
   LocalMessageUnboxedState,
   NotifyChatChatActivityType,
   localCancelPostRpcPromise,
@@ -206,6 +211,10 @@ function openFolder (): OpenFolder {
   return {type: 'chat:openFolder', payload: undefined}
 }
 
+function openTlfInChat (tlf: string): OpenTlfInChat {
+  return {type: 'chat:openTlfInChat', payload: tlf}
+}
+
 function startConversation (users: Array<string>): StartConversation {
   return {type: 'chat:startConversation', payload: {users}}
 }
@@ -251,11 +260,18 @@ function retryAttachment (message: Constants.AttachmentMessage): Constants.Selec
   if (!filename || !title || !previewType) {
     throw new Error('attempted to retry attachment without filename')
   }
-  return {type: 'chat:selectAttachment', payload: {conversationIDKey, filename, title, type: previewType || 'Other', outboxID}}
+  const input = {
+    conversationIDKey,
+    filename,
+    outboxID,
+    title,
+    type: previewType || 'Other',
+  }
+  return {type: 'chat:selectAttachment', payload: {input}}
 }
 
-function selectAttachment (conversationIDKey: ConversationIDKey, filename: string, title: string, type: Constants.AttachmentType): Constants.SelectAttachment {
-  return {type: 'chat:selectAttachment', payload: {conversationIDKey, filename, title, type}}
+function selectAttachment (input: AttachmentInput): Constants.SelectAttachment {
+  return {type: 'chat:selectAttachment', payload: {input}}
 }
 
 function loadAttachment (conversationIDKey: ConversationIDKey, messageID: Constants.MessageID, loadPreview: boolean, isHdPreview: boolean, filename: string): Constants.LoadAttachment {
@@ -263,12 +279,16 @@ function loadAttachment (conversationIDKey: ConversationIDKey, messageID: Consta
 }
 
 // Select conversation, fromUser indicates it was triggered by a user and not programatically
-function selectConversation (conversationIDKey: ConversationIDKey, fromUser: boolean): SelectConversation {
+function selectConversation (conversationIDKey: ?ConversationIDKey, fromUser: boolean): SelectConversation {
   return {type: 'chat:selectConversation', payload: {conversationIDKey, fromUser}}
 }
 
 function _inboxConversationToInboxState (convo: ?ConversationLocal): ?InboxState {
   if (!convo || !convo.info || !convo.info.id) {
+    return null
+  }
+
+  if (convo.info.visibility !== ChatTypes.CommonTLFVisibility.private) {
     return null
   }
 
@@ -612,7 +632,7 @@ function * _incomingMessage (action: IncomingMessage): SagaGenerator<any, any> {
     case NotifyChatChatActivityType.setStatus:
       const setStatus: ?SetStatusInfo = action.payload.activity.setStatus
       if (setStatus) {
-        _updateInbox(setStatus.conv)
+        yield call(_updateInbox, setStatus.conv)
         const conversationIDKey = conversationIDToKey(setStatus.convID)
         const muted = setStatus.status === CommonConversationStatus.muted
         yield put(({
@@ -670,19 +690,37 @@ function * _incomingMessage (action: IncomingMessage): SagaGenerator<any, any> {
       return
     case NotifyChatChatActivityType.readMessage:
       if (action.payload.activity.readMessage) {
-        _updateInbox(action.payload.activity.readMessage.conv)
+        yield call(_updateInbox, action.payload.activity.readMessage.conv)
       }
       return
     case NotifyChatChatActivityType.incomingMessage:
       const incomingMessage: ?IncomingMessageRPCType = action.payload.activity.incomingMessage
       if (incomingMessage) {
-        _updateInbox(incomingMessage.conv)
+        // If it's a public chat, the GUI (currently) wants no part of it. We
+        // especially don't want to surface the conversation as if it were a
+        // private one, which is what we were doing before this change.
+        if (incomingMessage.conv && incomingMessage.conv.info && incomingMessage.conv.info.visibility !== CommonTLFVisibility.private) {
+          return
+        }
+
+        yield call(_updateInbox, incomingMessage.conv)
 
         const messageUnboxed: MessageUnboxed = incomingMessage.message
         const yourName = yield select(usernameSelector)
         const yourDeviceName = yield select(_devicenameSelector)
         const conversationIDKey = conversationIDToKey(incomingMessage.convID)
-        const message = _unboxedToMessage(messageUnboxed, 0, yourName, yourDeviceName, conversationIDKey)
+        const message = _unboxedToMessage(messageUnboxed, yourName, yourDeviceName, conversationIDKey)
+
+        const pagination = incomingMessage.pagination
+        if (pagination) {
+          yield put(({
+            type: 'chat:updatePaginationNext',
+            payload: {
+              conversationIDKey,
+              paginationNext: pagination.next,
+            },
+          }: Constants.UpdatePaginationNext))
+        }
 
         // Is this message for the currently selected and focused conversation?
         // And is the Chat tab the currently displayed route? If all that is
@@ -703,13 +741,6 @@ function * _incomingMessage (action: IncomingMessage): SagaGenerator<any, any> {
               msgID: message.messageID,
             },
           })
-        }
-
-        // TODO short-term if we haven't seen this in the conversation list we'll refresh the inbox. Instead do an integration w/ gregor
-        const inboxConvo = yield select(_selectedInboxSelector, conversationIDKey)
-
-        if (!inboxConvo) {
-          yield put(loadInbox())
         }
 
         const conversationState = yield select(_conversationStateSelector, conversationIDKey)
@@ -813,6 +844,29 @@ function * _setupChatHandlers (): SagaGenerator<any, any> {
   })
 }
 
+const inboxSelector = (state: TypedState, conversationIDKey) => state.chat.get('inbox')
+
+function * selectValidConversation () {
+  const inbox = yield select(inboxSelector)
+  if (inbox.count()) {
+    const conversationIDKey = yield select(_selectedSelector)
+    // Is the currently selected one not validated? or empty
+    if (!inbox.find(c => c.get('conversationIDKey') === conversationIDKey &&
+          c.get('validated') && (!c.get('isEmpty') || c.get('youCreated')))) {
+      const validInbox = inbox.find(i => i.get('validated') && (!i.get('isEmpty') || i.get('youCreated')))
+      if (validInbox) {
+        const validInboxConvIDKey = validInbox.get('conversationIDKey')
+        yield put(selectConversation(validInboxConvIDKey, false))
+        yield put(loadMoreMessages(validInboxConvIDKey, true))
+      } else {
+        yield put(selectConversation(null, false))
+      }
+    } else {
+      yield put(loadMoreMessages(conversationIDKey, true))
+    }
+  }
+}
+
 const followingSelector = (state: TypedState) => state.config.following
 
 function * _loadInbox (action: ?LoadInbox): SagaGenerator<any, any> {
@@ -857,7 +911,7 @@ function * _loadInbox (action: ?LoadInbox): SagaGenerator<any, any> {
       chatInboxConversation: takeFromChannelMap(loadInboxChanMap, 'chat.1.chatUi.chatInboxConversation'),
       chatInboxFailed: takeFromChannelMap(loadInboxChanMap, 'chat.1.chatUi.chatInboxFailed'),
       finished: takeFromChannelMap(loadInboxChanMap, 'finished'),
-      timeout: call(delay, 5000),
+      timeout: call(delay, 30000),
     })
 
     if (incoming.chatInboxConversation) {
@@ -873,31 +927,44 @@ function * _loadInbox (action: ?LoadInbox): SagaGenerator<any, any> {
     } else if (incoming.chatInboxFailed) {
       console.warn('ignoring chatInboxFailed', incoming.chatInboxFailed)
       incoming.chatInboxFailed.response.result()
+      const error = incoming.chatInboxFailed.params.error
+      const conversationIDKey = conversationIDToKey(incoming.chatInboxFailed.params.convID)
+      const conversation = new InboxStateRecord({
+        info: null,
+        isEmpty: false,
+        conversationIDKey,
+        participants: List([].concat(error.rekeyInfo ? error.rekeyInfo.writerNames : [], error.rekeyInfo ? error.rekeyInfo.readerNames : []).filter(Boolean)),
+        muted: false,
+        time: error.remoteConv.readerInfo.mtime,
+        snippet: null,
+        validated: true,
+      })
+      yield put(({type: 'chat:updateInbox', payload: {conversation}}: Constants.UpdateInbox))
+
+      switch (error.typ) {
+        case LocalConversationErrorType.selfrekeyneeded: {
+          yield put({type: 'chat:updateInboxRekeySelf', payload: {conversationIDKey}})
+          break
+        }
+        case LocalConversationErrorType.otherrekeyneeded: {
+          const rekeyers = error.rekeyInfo.rekeyers
+          yield put({type: 'chat:updateInboxRekeyOthers', payload: {conversationIDKey, rekeyers}})
+          break
+        }
+        default:
+          if (__DEV__) {
+            console.warn('Inbox error:', error)
+          }
+      }
     } else if (incoming.finished) {
       finishedCalled = true
       yield put({type: 'chat:updateInboxComplete', payload: undefined})
-      // check valid selected
-      const inboxSelector = (state: TypedState, conversationIDKey) => state.chat.get('inbox')
-      const inbox = yield select(inboxSelector)
-      if (inbox.count()) {
-        const conversationIDKey = yield select(_selectedSelector)
-
-        // Is the currently selected one not validated?
-        if (!inbox.find(c => c.get('conversationIDKey') === conversationIDKey && c.get('validated'))) {
-          const validInbox = inbox.find(i => i.get('validated'))
-          if (validInbox) {
-            const validInboxConvIDKey = validInbox.get('conversationIDKey')
-            yield put(selectConversation(validInboxConvIDKey, false))
-            yield put(loadMoreMessages(validInboxConvIDKey, true))
-          }
-        } else {
-          yield put(loadMoreMessages(conversationIDKey, true))
-        }
-      }
+      yield selectValidConversation()
       break
     } else if (incoming.timeout) {
       console.warn('Inbox loading timed out')
       yield put({type: 'chat:updateInboxComplete', payload: undefined})
+      yield selectValidConversation()
       break
     }
   }
@@ -928,11 +995,21 @@ function * _loadMoreMessages (action: LoadMoreMessages): SagaGenerator<any, any>
     return
   }
 
+  const rekeyInfoSelector = (state: TypedState, conversationIDKey: ConversationIDKey) => {
+    return state.chat.get('rekeyInfos').get(conversationIDKey)
+  }
+  const rekeyInfo = yield select(rekeyInfoSelector, conversationIDKey)
+
+  if (rekeyInfo) {
+    __DEV__ && console.log('Bailing on chat due to rekey info')
+    return
+  }
+
   const oldConversationState = yield select(_conversationStateSelector, conversationIDKey)
 
   let next
   if (oldConversationState) {
-    if (action.payload.onlyIfUnloaded && oldConversationState.get('paginationNext')) {
+    if (action.payload.onlyIfUnloaded && oldConversationState.get('isLoaded')) {
       __DEV__ && console.log('Bailing on chat load more due to already has initial load')
       return
     }
@@ -970,7 +1047,7 @@ function * _loadMoreMessages (action: LoadMoreMessages): SagaGenerator<any, any>
 
   const yourName = yield select(usernameSelector)
   const yourDeviceName = yield select(_devicenameSelector)
-  const messages = (thread && thread.thread && thread.thread.messages || []).map((message, idx) => _unboxedToMessage(message, idx, yourName, yourDeviceName, conversationIDKey)).reverse()
+  const messages = (thread && thread.thread && thread.thread.messages || []).map(message => _unboxedToMessage(message, yourName, yourDeviceName, conversationIDKey)).reverse()
   let newMessages = []
   messages.forEach((message, idx) => {
     if (idx > 0) {
@@ -1012,9 +1089,14 @@ function _threadToPagination (thread) {
 }
 
 function _maybeAddTimestamp (message: Message, prevMessage: Message): MaybeTimestamp {
-  if (prevMessage == null || prevMessage.type === 'Timestamp' || ['Timestamp', 'Deleted', 'Unhandled', 'Edit'].includes(message.type)) {
+  if (prevMessage == null || prevMessage.type === 'Timestamp' || ['Timestamp', 'Deleted', 'Unhandled', 'InvisibleError', 'Edit'].includes(message.type)) {
     return null
   }
+
+  if (!message.timestamp || !prevMessage.timestamp) {
+    return null
+  }
+
   // messageID 1 is an unhandled placeholder. We want to add a timestamp before
   // the first message, as well as between any two messages with long duration.
   if (prevMessage.messageID === 1 || message.timestamp - prevMessage.timestamp > Constants.howLongBetweenTimestampsMs) {
@@ -1027,7 +1109,10 @@ function _maybeAddTimestamp (message: Message, prevMessage: Message): MaybeTimes
   return null
 }
 
-function _unboxedToMessage (message: MessageUnboxed, idx: number, yourName, yourDeviceName, conversationIDKey: ConversationIDKey): Message {
+// used to key errors
+let errorIdx = 1
+
+function _unboxedToMessage (message: MessageUnboxed, yourName, yourDeviceName, conversationIDKey: ConversationIDKey): Message {
   if (message && message.state === LocalMessageUnboxedState.outbox && message.outbox) {
     // Outbox messages are always text, not attachments.
     const payload: OutboxRecord = message.outbox
@@ -1051,6 +1136,7 @@ function _unboxedToMessage (message: MessageUnboxed, idx: number, yourName, your
       you: yourName,
     }
   }
+
   if (message.state === LocalMessageUnboxedState.valid) {
     const payload = message.valid
     if (payload) {
@@ -1166,14 +1252,53 @@ function _unboxedToMessage (message: MessageUnboxed, idx: number, yourName, your
     }
   }
 
-  return {
-    type: 'Error', // TODO
-    messageID: idx,
-    key: Constants.messageKey('error', idx),
-    timestamp: Date.now(),
-    reason: 'temp',
-    conversationIDKey: conversationIDKey,
+  if (message.state === LocalMessageUnboxedState.error) {
+    const error = message.error
+    if (error) {
+      switch (error.errType) {
+        case LocalMessageUnboxedErrorType.misc:
+        case LocalMessageUnboxedErrorType.badversionCritical: // fallthrough
+        case LocalMessageUnboxedErrorType.identify: // fallthrough
+          return {
+            conversationIDKey,
+            key: Constants.messageKey('error', errorIdx++),
+            messageID: error.messageID,
+            reason: error.errMsg || '',
+            timestamp: error.ctime,
+            type: 'Error',
+          }
+        case LocalMessageUnboxedErrorType.badversion:
+          return {
+            conversationIDKey,
+            key: Constants.messageKey('error', errorIdx++),
+            data: message,
+            messageID: error.messageID,
+            timestamp: error.ctime,
+            type: 'InvisibleError',
+          }
+      }
+    }
   }
+
+  return {
+    type: 'Error',
+    key: Constants.messageKey('error', errorIdx++),
+    data: message,
+    reason: "The message couldn't be loaded",
+    conversationIDKey,
+  }
+}
+
+function * _openTlfInChat (action: OpenTlfInChat): SagaGenerator<any, any> {
+  const tlf = action.payload
+  const me = yield select(usernameSelector)
+  const userlist = parseFolderNameToUsers(me, tlf)
+  const users = userlist.map(u => u.username)
+  if (_.some(userlist, 'readOnly')) {
+    console.warn('Bug: openTlfToChat should never be called on a convo with readOnly members.')
+    return
+  }
+  yield put(startConversation(users))
 }
 
 function * _startConversation (action: StartConversation): SagaGenerator<any, any> {
@@ -1263,8 +1388,13 @@ function * _selectConversation (action: SelectConversation): SagaGenerator<any, 
   if (oldConversationState && oldConversationState.get('isStale')) {
     yield put({type: 'chat:clearMessages', payload: {conversationIDKey}})
   }
-  yield put(loadMoreMessages(conversationIDKey, true))
-  yield put(navigateTo([conversationIDKey], [chatTab]))
+
+  if (conversationIDKey) {
+    yield put(loadMoreMessages(conversationIDKey, true))
+    yield put(navigateTo([conversationIDKey], [chatTab]))
+  } else {
+    yield put(navigateTo([], [chatTab]))
+  }
 
   const inbox = yield select(_selectedInboxSelector, conversationIDKey)
   if (inbox) {
@@ -1275,7 +1405,7 @@ function * _selectConversation (action: SelectConversation): SagaGenerator<any, 
     return
   }
 
-  if (fromUser) {
+  if (fromUser && conversationIDKey) {
     yield put(updateBadging(conversationIDKey))
     yield put(updateLatestMessage(conversationIDKey))
   }
@@ -1364,7 +1494,8 @@ const _temporaryAttachmentMessageForUpload = (convID: ConversationIDKey, usernam
   key: Constants.messageKey('tempAttachment', outboxID),
 })
 
-function * _selectAttachment ({payload: {conversationIDKey, filename, title, type}}: Constants.SelectAttachment): SagaGenerator<any, any> {
+function * _selectAttachment ({payload: {input}}: Constants.SelectAttachment): SagaGenerator<any, any> {
+  const {conversationIDKey, title, filename, type} = input
   const outboxID = `attachmentUpload-${Math.ceil(Math.random() * 1e9)}`
   const username = yield select(usernameSelector)
 
@@ -1520,6 +1651,17 @@ function * _loadAttachment ({payload: {conversationIDKey, messageID, loadPreview
 
     if (cachedPath) {
       copy(cachedPath, filename)
+
+      // for visual feedback, we'll briefly display a progress bar
+      for (let i = 0; i < 5; i++) {
+        const fakeProgressAction: Constants.DownloadProgress = {
+          type: 'chat:downloadProgress',
+          payload: {conversationIDKey, messageID, isPreview: false, bytesComplete: i + 1, bytesTotal: 5},
+        }
+        yield put(fakeProgressAction)
+        yield delay(5)
+      }
+
       const action: Constants.AttachmentLoaded = {
         type: 'chat:attachmentLoaded',
         payload: {conversationIDKey, messageID, path: filename, isPreview: loadPreview, isHdPreview: isHdPreview},
@@ -1549,7 +1691,7 @@ function * _loadAttachment ({payload: {conversationIDKey, messageID, loadPreview
     const {bytesComplete, bytesTotal} = response.param
     const action: Constants.DownloadProgress = {
       type: 'chat:downloadProgress',
-      payload: {conversationIDKey, messageID, bytesTotal, bytesComplete},
+      payload: {conversationIDKey, messageID, isPreview: loadPreview || isHdPreview, bytesTotal, bytesComplete},
     }
     yield put(action)
     response.result()
@@ -1579,9 +1721,10 @@ function * _sendNotifications (action: AppendMessages): SagaGenerator<any, any> 
   const appFocused = yield select(_focusedSelector)
   const selectedTab = yield select(_routeSelector)
   const chatTabSelected = (selectedTab === chatTab)
+  const convoIsSelected = action.payload.isSelected
 
   // Only send if you're not looking at it
-  if (!action.isSelected || !appFocused || !chatTabSelected) {
+  if (!convoIsSelected || !appFocused || !chatTabSelected) {
     const me = yield select(usernameSelector)
     const message = (action.payload.messages.reverse().find(m => m.type === 'Text' && m.author !== me))
     // Is this message part of a muted conversation? If so don't notify.
@@ -1603,6 +1746,9 @@ function * _sendNotifications (action: AppendMessages): SagaGenerator<any, any> 
 
 function * _markThreadsStale (action: MarkThreadsStale): SagaGenerator<any, any> {
   const selectedConversation = yield select(_selectedSelector)
+  if (!selectedConversation) {
+    return
+  }
   yield put({type: 'chat:clearMessages', payload: {conversationIDKey: selectedConversation}})
   yield put(loadMoreMessages(selectedConversation, false))
 }
@@ -1650,6 +1796,7 @@ function * chatSaga (): SagaGenerator<any, any> {
     safeTakeLatest('chat:badgeAppForChat', _badgeAppForChat),
     safeTakeEvery(changedFocus, _changedFocus),
     safeTakeEvery('chat:deleteMessage', _deleteMessage),
+    safeTakeEvery('chat:openTlfInChat', _openTlfInChat),
   ]
 }
 
@@ -1666,6 +1813,7 @@ export {
   newChat,
   selectAttachment,
   openFolder,
+  openTlfInChat,
   postMessage,
   retryAttachment,
   retryMessage,

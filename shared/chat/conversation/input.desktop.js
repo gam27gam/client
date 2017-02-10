@@ -13,8 +13,6 @@ type State = {
   text: string,
 }
 
-const _cachedInput: {[key: ?string]: ?string} = { }
-
 class Conversation extends Component<void, Props, State> {
   _input: any;
   _fileInput: any;
@@ -27,23 +25,17 @@ class Conversation extends Component<void, Props, State> {
   constructor (props: Props) {
     super(props)
     const {emojiPickerOpen} = props
-    this.state = {emojiPickerOpen, text: _cachedInput[props.selectedConversation] || ''}
+    this.state = {emojiPickerOpen, text: this.props.defaultText}
   }
 
   componentDidMount () {
     document.body.addEventListener('keydown', this._globalKeyDownHandler)
+    document.body.addEventListener('keypress', this._globalKeyDownHandler)
   }
 
   componentWillUnmount () {
     document.body.removeEventListener('keydown', this._globalKeyDownHandler)
-  }
-
-  componentWillReceiveProps (nextProps: Props) {
-    if (nextProps.selectedConversation !== this.props.selectedConversation) {
-      this.focusInput()
-      _cachedInput[this.props.selectedConversation] = this.state.text
-      this.setState({text: _cachedInput[nextProps.selectedConversation] || ''})
-    }
+    document.body.removeEventListener('keypress', this._globalKeyDownHandler)
   }
 
   componentDidUpdate (prevProps: Props) {
@@ -52,7 +44,7 @@ class Conversation extends Component<void, Props, State> {
     }
   }
 
-  _globalKeyDownHandler = (ev: Event) => {
+  _globalKeyDownHandler = (ev: KeyboardEvent) => {
     if (!this._input) {
       return
     }
@@ -62,7 +54,11 @@ class Conversation extends Component<void, Props, State> {
       return
     }
 
-    this._input.focus()
+    const isPasteKey = ev.key === 'v' && (ev.ctrlKey || ev.metaKey)
+    const isValidSpecialKey = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter'].includes(ev.key)
+    if (ev.type === 'keypress' || isPasteKey || isValidSpecialKey) {
+      this._input.focus()
+    }
   }
 
   _insertEmoji (emojiColons: string) {
@@ -85,10 +81,21 @@ class Conversation extends Component<void, Props, State> {
     }
   }
 
-  _pickFile () {
-    if (this._fileInput && this._fileInput.files && this._fileInput.files[0]) {
-      const {path, name, type} = this._fileInput.files[0]
-      this.props.onAttach(path, name, type.indexOf('image') >= 0 ? 'Image' : 'Other')
+  _pickFile = () => {
+    if (!this.props.selectedConversation) throw new Error('No conversation')
+    const conversationIDKey = this.props.selectedConversation
+    if (this._fileInput && this._fileInput.files && this._fileInput.files.length > 0) {
+      const inputs = Array.prototype.map.call(this._fileInput.files, file => {
+        const {path, name, type} = file
+        return {
+          conversationIDKey,
+          filename: path,
+          title: name,
+          type: type.indexOf('image') >= 0 ? 'Image' : 'Other',
+        }
+      })
+
+      this.props.onAttach(inputs)
       this._fileInput.value = null
     }
   }
@@ -97,16 +104,46 @@ class Conversation extends Component<void, Props, State> {
     this._input && this._input.focus()
   }
 
+  getValue () {
+    return this._input ? this._input.getValue() : ''
+  }
+
   _pickerOnClick = (emoji) => {
     this._insertEmoji(emoji.colons)
     this._onClickEmoji()
+  }
+
+  _onKeyDown = (e: SyntheticKeyboardEvent) => {
+    if (e.key === 'ArrowUp' && !this.state.text) {
+      this.props.onEditLastMessage()
+    }
+  }
+
+  _onEnterKeyDown = (e: SyntheticKeyboardEvent) => {
+    e.preventDefault()
+    if (this.state.text) {
+      this.props.onPostMessage(this.state.text)
+      this.setState({text: ''})
+    }
+  }
+
+  _onChangeText = text => {
+    this.setState({text})
+  }
+
+  _setFileInputRef = r => {
+    this._fileInput = r
+  }
+
+  _closePicker = () => {
+    this.setState({emojiPickerOpen: false})
   }
 
   render () {
     return (
       <Box style={{...globalStyles.flexBoxColumn, borderTop: `solid 1px ${globalColors.black_05}`}}>
         <Box style={{...globalStyles.flexBoxRow, alignItems: 'flex-start'}}>
-          <input type='file' style={{display: 'none'}} ref={r => { this._fileInput = r }} onChange={() => this._pickFile()} />
+          <input type='file' style={{display: 'none'}} ref={this._setFileInputRef} onChange={this._pickFile} multiple={true} />
           <Input
             autoFocus={true}
             small={true}
@@ -114,22 +151,17 @@ class Conversation extends Component<void, Props, State> {
             ref={this._setRef}
             hintText='Write a message'
             hideUnderline={true}
-            onChangeText={text => this.setState({text})}
+            onChangeText={this._onChangeText}
             value={this.state.text}
             multiline={true}
             rowsMin={1}
             rowsMax={5}
-            onEnterKeyDown={(e) => {
-              e.preventDefault()
-              if (this.state.text) {
-                this.props.onPostMessage(this.state.text)
-                this.setState({text: ''})
-              }
-            }}
+            onKeyDown={this._onKeyDown}
+            onEnterKeyDown={this._onEnterKeyDown}
           />
           {this.state.emojiPickerOpen && (
             <Box>
-              <Box style={{position: 'absolute', right: 0, bottom: 0, top: 0, left: 0}} onClick={() => this.setState({emojiPickerOpen: false})} />
+              <Box style={{position: 'absolute', right: 0, bottom: 0, top: 0, left: 0}} onClick={this._closePicker} />
               <Box style={{position: 'relative'}}>
                 <Box style={{position: 'absolute', right: 0, bottom: 0}}>
                   <Picker onClick={this._pickerOnClick} emoji={'ghost'} title={'emojibase'} backgroundImageFn={backgroundImageFn} />

@@ -7,7 +7,6 @@ import EditPopup from './edit-popup.desktop'
 import LoadingMore from './messages/loading-more'
 import React, {Component} from 'react'
 import ReactDOM from 'react-dom'
-import SidePanel from './side-panel/index.desktop'
 import _ from 'lodash'
 import messageFactory from './messages'
 import shallowEqual from 'shallowequal'
@@ -75,22 +74,6 @@ class ConversationList extends Component<void, Props, State> {
     }
   }
 
-  _indexToID = index => {
-    if (index === 0) {
-      return 'header'
-    } else if (index === 1) {
-      return 'loading'
-    } else {
-      const messageIndex = index - cellMessageStartIndex
-      const message = this.state.messages.get(messageIndex)
-      const id = message && message.key
-      if (id == null) {
-        console.warn('id is null for index:', messageIndex)
-      }
-      return id
-    }
-  }
-
   shouldComponentUpdate (nextProps: Props, nextState: State) {
     return !shallowEqual(this.props, nextProps) || !shallowEqual(this.state, nextState)
   }
@@ -155,6 +138,10 @@ class ConversationList extends Component<void, Props, State> {
 
     if (willScrollDown) {
       this.setState({isLockedToBottom: true})
+    }
+
+    if (this.props.moreToLoad !== nextProps.moreToLoad) {
+      this._shouldForceUpdateGrid = true
     }
   }
 
@@ -289,7 +276,7 @@ class ConversationList extends Component<void, Props, State> {
     const clientRect = event.target.getBoundingClientRect()
 
     const messageNode = this._findMessageFromDOMNode(event.target)
-    const messageRect = messageNode && messageNode.getClientRects()[0]
+    const messageRect = messageNode && this._domNodeToRect(messageNode)
     // Position next to button (client rect)
     // TODO: Measure instead of pixel math
     const x = clientRect.left - 205
@@ -410,6 +397,41 @@ class ConversationList extends Component<void, Props, State> {
     }
   }
 
+  _domNodeToRect (element) {
+    const bodyRect = document.body.getBoundingClientRect()
+    const elemRect = element.getBoundingClientRect()
+
+    return {
+      height: elemRect.height,
+      left: elemRect.left - bodyRect.left,
+      top: elemRect.top - bodyRect.top,
+      width: elemRect.width,
+    }
+  }
+
+  onEditLastMessage = () => {
+    if (!this._list) {
+      return
+    }
+
+    const entry: any = this.state.messages.findLastEntry(m => m.type === 'Text' && m.author === this.props.you)
+    if (entry) {
+      const idx: number = entry[0]
+      const message: TextMessage = entry[1]
+      this._list.Grid.scrollToCell({columnIndex: 0, rowIndex: idx})
+      const listNode = ReactDOM.findDOMNode(this._list)
+      if (listNode) {
+        const messageNodes = listNode.querySelectorAll(`[data-message-key="${message.key}"]`)
+        if (messageNodes) {
+          const messageNode = messageNodes[0]
+          if (messageNode) {
+            this._showEditor(message, this._domNodeToRect(messageNode))
+          }
+        }
+      }
+    }
+  }
+
   _cellRangeRenderer = options => chatCellRangeRenderer(this.state.messages.count(), this._cellCache, options)
 
   render () {
@@ -453,9 +475,6 @@ class ConversationList extends Component<void, Props, State> {
                   columnWidth={width}
                   rowRenderer={this._rowRenderer} />)}</CellMeasurer>)}
         </AutoSizer>
-        {this.props.sidePanelOpen && <div style={{...globalStyles.flexBoxColumn, bottom: 0, position: 'absolute', right: 0, top: 0, width: 320}}>
-          <SidePanel {...this.props} />
-        </div>}
       </div>
     )
   }

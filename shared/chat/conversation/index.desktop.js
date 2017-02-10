@@ -6,12 +6,13 @@ import List from './list.desktop'
 import NoConversation from './no-conversation.desktop'
 import ParticipantRekey from './participant-rekey.desktop'
 import React, {Component} from 'react'
+import SidePanel from './side-panel'
 import YouRekey from './you-rekey.desktop.js'
 import {Box, Icon} from '../../common-adapters'
 import {globalStyles, globalColors} from '../../styles'
 import {readImageFromClipboard} from '../../util/clipboard.desktop'
 import {nothingSelected} from '../../constants/chat'
-import {withHandlers, branch, renderComponent} from 'recompose'
+import {withHandlers, branch, renderComponent, compose} from 'recompose'
 
 import type {Props} from '.'
 
@@ -19,35 +20,38 @@ type State = {
   showDropOverlay: boolean,
 }
 
-type FocusHandlerProps = {
-  onInputRef: (input: React$Element<*>) => void,
-  onFocusInput: () => void,
+type EditLastHandlerProps = {
+  onListRef: (list: React$Element<*>) => void,
+  onEditLastMessage: () => void,
 }
 
-const withFocusHandlers = withHandlers(() => {
-  let _input
+const withEditLastHandlers = withHandlers(() => {
+  let _list
   return {
-    onInputRef: (props) => (input) => { _input = input },
-    onFocusInput: (props) => () => { _input && _input.focusInput() },
+    onEditLastMessage: (props) => () => { _list && _list.onEditLastMessage() },
+    onListRef: (props) => (list) => { _list = list },
   }
 })
 
-class Conversation extends Component<void, Props & FocusHandlerProps, State> {
+class Conversation extends Component<void, Props & EditLastHandlerProps, State> {
+  _input: Input
+
   state = {
     showDropOverlay: false,
   }
 
   _onDrop = e => {
     const fileList = e.dataTransfer.files
+    if (!this.props.selectedConversation) throw new Error('No conversation')
+    const conversationIDKey = this.props.selectedConversation
     // FileList, not an array
-    const files = Array.prototype.map.call(fileList, file => ({
-      name: file.name,
-      path: file.path,
+    const inputs = Array.prototype.map.call(fileList, file => ({
+      conversationIDKey,
+      filename: file.path,
+      title: file.name,
       type: file.type,
     }))
-    files.forEach(f => {
-      this.props.onAttach(f.path, f.name, f.type.includes('image/') ? 'Image' : 'Other')
-    })
+    this.props.onAttach(inputs)
     this.setState({showDropOverlay: false})
   }
 
@@ -66,11 +70,31 @@ class Conversation extends Component<void, Props & FocusHandlerProps, State> {
       this.setState({showDropOverlay: true})
     }).then(clipboardData => {
       this.setState({showDropOverlay: false})
+      if (!this.props.selectedConversation) throw new Error('No conversation')
       if (clipboardData) {
         const {path, title} = clipboardData
-        this.props.onAttach(path, title, 'Image')
+        this.props.onAttach([{
+          conversationIDKey: this.props.selectedConversation,
+          filename: path,
+          title,
+          type: 'Image',
+        }])
       }
     })
+  }
+
+  _onInputRef = (input) => {
+    this._input = input
+  }
+
+  _onFocusInput = () => {
+    this._input && this._input.focusInput()
+  }
+
+  componentWillUnmount () {
+    if (this._input) {
+      this.props.onStoreInputText(this._input.getValue())
+    }
   }
 
   render () {
@@ -89,8 +113,8 @@ class Conversation extends Component<void, Props & FocusHandlerProps, State> {
       onAttach,
       onDeleteMessage,
       onEditMessage,
-      onFocusInput,
-      onInputRef,
+      onEditLastMessage,
+      onListRef,
       onLoadAttachment,
       onLoadMoreMessages,
       onMuteConversation,
@@ -123,6 +147,7 @@ class Conversation extends Component<void, Props & FocusHandlerProps, State> {
           onOpenFolder={onOpenFolder}
           onToggleSidePanel={onToggleSidePanel}
           participants={participants}
+          muted={muted}
           sidePanelOpen={sidePanelOpen}
           you={you}
           metaDataMap={metaDataMap}
@@ -138,32 +163,42 @@ class Conversation extends Component<void, Props & FocusHandlerProps, State> {
           messages={messages}
           moreToLoad={moreToLoad}
           muted={muted}
-          onAddParticipant={onAddParticipant}
           onDeleteMessage={onDeleteMessage}
           onEditMessage={onEditMessage}
-          onFocusInput={onFocusInput}
+          onFocusInput={this._onFocusInput}
           onLoadAttachment={onLoadAttachment}
           onLoadMoreMessages={onLoadMoreMessages}
-          onMuteConversation={onMuteConversation}
           onOpenInFileUI={onOpenInFileUI}
           onOpenInPopup={onOpenInPopup}
           onRetryAttachment={onRetryAttachment}
           onRetryMessage={onRetryMessage}
-          onShowProfile={onShowProfile}
-          participants={participants}
+          ref={onListRef}
           selectedConversation={selectedConversation}
           sidePanelOpen={sidePanelOpen}
           validated={validated}
         />
         {banner}
         <Input
-          ref={onInputRef}
+          ref={this._onInputRef}
+          defaultText={this.props.inputText}
           emojiPickerOpen={emojiPickerOpen}
           isLoading={isLoading}
           onAttach={onAttach}
+          onEditLastMessage={onEditLastMessage}
           onPostMessage={onPostMessage}
           selectedConversation={selectedConversation}
         />
+        {sidePanelOpen && <div style={{...globalStyles.flexBoxColumn, bottom: 0, position: 'absolute', right: 0, top: 35, width: 320}}>
+          <SidePanel
+            you={you}
+            metaDataMap={metaDataMap}
+            followingMap={followingMap}
+            muted={muted}
+            onAddParticipant={onAddParticipant}
+            onMuteConversation={onMuteConversation}
+            onShowProfile={onShowProfile}
+            participants={participants} />
+        </div>}
         {dropOverlay}
       </Box>
     )
@@ -199,6 +234,6 @@ export default branch(
       renderComponent(ParticipantRekey),
       renderComponent(YouRekey)
     ),
-    withFocusHandlers
+    compose(withEditLastHandlers)
   )
 )(Conversation)

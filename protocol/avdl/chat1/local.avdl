@@ -276,6 +276,7 @@ protocol local {
     string errMsg;
     MessageID messageID;
     MessageType messageType;
+    gregor1.Time ctime;
   }
 
   variant MessageUnboxed switch (MessageUnboxedState state) {
@@ -331,6 +332,7 @@ protocol local {
     string message;
     Conversation remoteConv;
     boolean permanent;
+    string unverifiedTLFName;
     // Only set if typ is for rekeying.
     union { null, ConversationErrorRekey} rekeyInfo;
   }
@@ -353,8 +355,8 @@ protocol local {
     union { null, ConversationErrorLocal } error;
     ConversationInfoLocal info;
     ConversationReaderInfo readerInfo;
-    array<ConversationID> supersedes;
-    array<ConversationID> supersededBy;
+    array<ConversationMetadata> supersedes;
+    array<ConversationMetadata> supersededBy;
 
     array<MessageUnboxed> maxMessages; // the latest message for each message type
 

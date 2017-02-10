@@ -701,8 +701,6 @@ export type ChatActivityType =
 export type Conversation = {
   metadata: ConversationMetadata,
   readerInfo?: ?ConversationReaderInfo,
-  supersedes?: ?Array<ConversationMetadata>,
-  supersededBy?: ?Array<ConversationMetadata>,
   maxMsgs?: ?Array<MessageBoxed>,
 }
 
@@ -711,6 +709,7 @@ export type ConversationErrorLocal = {
   message: string,
   remoteConv: Conversation,
   permanent: boolean,
+  unverifiedTLFName: string,
   rekeyInfo?: ?ConversationErrorRekey,
 }
 
@@ -761,8 +760,8 @@ export type ConversationLocal = {
   error?: ?ConversationErrorLocal,
   info: ConversationInfoLocal,
   readerInfo: ConversationReaderInfo,
-  supersedes?: ?Array<ConversationID>,
-  supersededBy?: ?Array<ConversationID>,
+  supersedes?: ?Array<ConversationMetadata>,
+  supersededBy?: ?Array<ConversationMetadata>,
   maxMessages?: ?Array<MessageUnboxed>,
   isEmpty: boolean,
   identifyFailures?: ?Array<keybase1.TLFIdentifyFailure>,
@@ -774,6 +773,8 @@ export type ConversationMetadata = {
   visibility: TLFVisibility,
   status: ConversationStatus,
   finalizeInfo?: ?ConversationFinalizeInfo,
+  supersedes?: ?Array<ConversationMetadata>,
+  supersededBy?: ?Array<ConversationMetadata>,
   activeList?: ?Array<gregor1.UID>,
 }
 
@@ -1022,6 +1023,7 @@ export type IncomingMessage = {
   message: MessageUnboxed,
   convID: ConversationID,
   conv?: ?ConversationLocal,
+  pagination?: ?Pagination,
 }
 
 export type LocalFileSource = {
@@ -1150,6 +1152,7 @@ export type MessageUnboxedError = {
   errMsg: string,
   messageID: MessageID,
   messageType: MessageType,
+  ctime: gregor1.Time,
 }
 
 export type MessageUnboxedErrorType =

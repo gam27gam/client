@@ -227,6 +227,28 @@ Object {
 }
 `;
 
+exports[`Markdown parser parses native zwj emoji correctly 1`] = `
+Object {
+  "children": Array [
+    Object {
+      "children": Array [
+        ":woman-kiss-woman:",
+      ],
+      "type": "native-emoji",
+    },
+    " ",
+    Object {
+      "children": Array [
+        ":woman-woman-girl-girl:",
+      ],
+      "type": "native-emoji",
+    },
+    "!",
+  ],
+  "type": "text",
+}
+`;
+
 exports[`Markdown parser parses numbers and some symbols emoji 1`] = `
 Object {
   "children": Array [
@@ -329,6 +351,14 @@ Object {
     ftp://blah.com,
     gopher://blah.com,
     mailto:blah@blah.com
+    ",
+    Object {
+      "children": Array [
+        "http://keybase.io",
+      ],
+      "type": "italic",
+    },
+    "
   Include:
     ",
     Object {
@@ -348,25 +378,6 @@ Object {
           ],
           "href": "http://keybase.io",
           "type": "link",
-        },
-      ],
-      "type": "bold",
-    },
-    "
-    ",
-    Object {
-      "children": Array [
-        Object {
-          "children": Array [
-            Object {
-              "children": Array [
-                "http://keybase.io",
-              ],
-              "href": "http://keybase.io",
-              "type": "link",
-            },
-          ],
-          "type": "italic",
         },
       ],
       "type": "bold",
@@ -422,6 +433,15 @@ Object {
         "keybase.io/a/user/lookup?one=1&two=2",
       ],
       "href": "http://keybase.io/a/user/lookup?one=1&two=2",
+      "type": "link",
+    },
+    "
+    ",
+    Object {
+      "children": Array [
+        "keybase.io/a/user/path_with_underscore",
+      ],
+      "href": "http://keybase.io/a/user/path_with_underscore",
       "type": "link",
     },
     "
