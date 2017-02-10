@@ -1603,7 +1603,7 @@ function * _selectAttachment ({payload: {input}}: Constants.SelectAttachment): S
       payload: {
         conversationIDKey,
         outboxID,
-        message: {type: 'Attachment', messageState: 'sent', messageID, key: messageID},
+        message: {type: 'Attachment', messageState: 'sent', messageID, key: Constants.messageKey('messageID', common.messageID)},
       },
     }: Constants.UpdateTempMessage))
     yield put(({
