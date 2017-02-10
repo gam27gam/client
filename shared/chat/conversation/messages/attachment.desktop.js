@@ -1,6 +1,7 @@
 // @flow
 import * as Constants from '../../../constants/chat'
 import MessageComponent from './shared.desktop'
+import moment from 'moment'
 import React, {PureComponent} from 'react'
 import {Box, Icon, ProgressIndicator, Text} from '../../../common-adapters'
 import {fileUIName} from '../../../constants/platform'
@@ -28,7 +29,7 @@ function AttachmentTitle ({messageState, title}: {messageState: Constants.Attach
   return <Text type='BodySemibold' style={style}>{title}</Text>
 }
 
-function PreviewImage ({message: {previewPath, previewType, previewSize, messageState}, onOpenInPopup}: {message: Constants.AttachmentMessage, onOpenInPopup: ?() => void}) {
+function PreviewImage ({message: {previewDuration, previewPath, previewType, previewSize, messageState}, onOpenInPopup}: {message: Constants.AttachmentMessage, onOpenInPopup: ?() => void}) {
   if (previewType === 'Image') {
     let style = {
       ...globalStyles.flexBoxRow,
@@ -54,6 +55,12 @@ function PreviewImage ({message: {previewPath, previewType, previewSize, message
           <ImageIcon
             style={{position: 'relative', right: 19, top: 3}}
             type={messageState === 'downloading' ? 'Downloading' : 'Downloaded'} />}
+        {previewDuration &&
+          <Text
+            type='BodySemibold'
+            style={{position: 'absolute', color: 'white', fontSize: 12, right: globalMargins.tiny, bottom: globalMargins.xtiny}}
+          >{moment.utc(previewDuration).format('m:ss')}</Text>
+        }
       </Box>
     )
   }

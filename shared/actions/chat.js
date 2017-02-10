@@ -1170,6 +1170,8 @@ function _unboxedToMessage (message: MessageUnboxed, yourName, yourDeviceName, c
           const attachment: ChatTypes.MessageAttachment = payload.messageBody.attachment
           const preview = attachment && attachment.preview
           const mimeType = preview && preview.mimeType
+          const previewMetadata = preview && previewMetadata
+          const previewDurationMs = previewMetadata && previewMetadata.video && previewMetadata.video.durationMs
           const previewSize = preview && preview.metadata && Constants.parseMetadataPreviewSize(preview.metadata)
 
           let messageState
@@ -1185,6 +1187,7 @@ function _unboxedToMessage (message: MessageUnboxed, yourName, yourDeviceName, c
             filename: attachment.object.filename,
             title: attachment.object.title,
             messageState,
+            previewDurationMs,
             previewType: mimeType && mimeType.indexOf('image') === 0 ? 'Image' : 'Other',
             previewPath: null,
             hdPreviewPath: null,
